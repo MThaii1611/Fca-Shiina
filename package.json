@@ -1,0 +1,40 @@
+{
+  "name": "Shiina-Fca",
+  "version": "1.5.3",
+  "description": "Fca be tong - fixed by Codex",
+  "main": "index.js",
+  "scripts": {
+    "test": "mocha"
+  },
+  "author": "Shiina",
+  "license": "MIT",
+  "dependencies": {
+    "better-sqlite3": "7.6.2",
+    "bluebird": "latest",
+    "chalk": "4.1.2",
+    "cheerio": "latest",
+    "deasync": "^0.1.28",
+    "duplexify": "^4.1.2",
+    "got": "^11.8.6",
+    "https-proxy-agent": "latest",
+    "mqtt": "^4.3.7",
+    "npmlog": "latest",
+    "readable-stream": "^4.4.0",
+    "request": "latest",
+    "tough-cookie": "^4.1.2",
+    "uuid": "latest",
+    "ws": "^8.13.0"
+  },
+  "engines": {
+    "node": ">=14.x"
+  },
+  "devDependencies": {
+    "eslint": "^8.40.0",
+    "mocha": "latest",
+    "prettier": "latest"
+  },
+  "keywords": [
+    "fca",
+    "facebook-chat-api"
+  ]
+}
