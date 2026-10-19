@@ -1,0 +1,18 @@
+{
+  "lang": "vi",
+  "LOGIN_SUCCESS_COOKIE": "✅ Đăng nhập thành công bằng Cookie",
+  "LOGIN_SUCCESS_APPSTATE": "✅ Đăng nhập thành công bằng Appstate",
+  "LOGIN_FAILED": "❌ Đăng nhập thất bại! Hãy thay cookie/appstate mới",
+  "LOGIN_DEAD": "💀 Cookie/Appstate đã die! Hãy thay mới",
+  "LOGIN_DEAD_STOP": "⛔ Dừng mọi hoạt động do cookie/appstate die",
+  "UID": "🤖 UID Bot: %1",
+  "NAME": "📛 Tên: %1",
+  "SERVER_LOCATION": "🌐 Vị trí server: %1",
+  "LOAD_API": "⚡ Tiến hành load api FCA",
+  "API_LIGHTSPEED": "🔌 Lightspeed -> Tổng: %1 | Thành công: %2 | Thất bại: %3",
+  "API_HTTP": "🌐 Http -> Tổng: %1 | Thành công: %2 | Thất bại: %3",
+  "API_FAIL_FILE": "   ⚠ %1 => %2",
+  "START_SUCCESS": "🚀 Start thành công: %1 giây",
+  "NEW_USER": "👤 Load data người dùng mới -> %1 (%2)",
+  "NEW_GROUP": "👥 Load data nhóm mới -> %1 (%2)"
+}

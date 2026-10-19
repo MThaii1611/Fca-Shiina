@@ -1,40 +1,39 @@
 {
-  "name": "Shiina-Fca",
-  "version": "1.5.3",
-  "description": "Fca be tong - fixed by Codex",
+  "name": "fca-shiina",
+  "version": "1.0.0",
+  "description": "FCA Shiina - Facebook Chat API với Lightspeed Gateway (Pure JS Framework)",
   "main": "index.js",
   "scripts": {
-    "test": "mocha"
+    "start": "node index.js"
   },
   "author": "Shiina",
   "license": "MIT",
   "dependencies": {
-    "better-sqlite3": "7.6.2",
-    "bluebird": "latest",
+    "axios": "^1.6.0",
+    "bluebird": "^3.7.2",
     "chalk": "4.1.2",
-    "cheerio": "latest",
-    "deasync": "^0.1.28",
-    "duplexify": "^4.1.2",
+    "form-data": "^4.0.0",
+    "fs-extra": "^11.1.1",
     "got": "^11.8.6",
-    "https-proxy-agent": "latest",
+    "is-hexcolor": "^1.0.0",
+    "lodash": "^4.18.1",
     "mqtt": "^4.3.7",
-    "npmlog": "latest",
-    "readable-stream": "^4.4.0",
-    "request": "latest",
+    "npmlog": "^6.0.2",
+    "pretty-ms": "^9.3.1",
+    "request": "^2.88.2",
     "tough-cookie": "^4.1.2",
-    "uuid": "latest",
+    "uuid": "^9.0.0",
     "ws": "^8.13.0"
   },
-  "engines": {
-    "node": ">=14.x"
+  "optionalDependencies": {
+    "better-sqlite3": "^9.0.0"
   },
-  "devDependencies": {
-    "eslint": "^8.40.0",
-    "mocha": "latest",
-    "prettier": "latest"
+  "engines": {
+    "node": ">=16.x"
   },
   "keywords": [
     "fca",
-    "facebook-chat-api"
+    "facebook-chat-api",
+    "lightspeed"
   ]
 }

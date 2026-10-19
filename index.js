@@ -1,226 +1,265 @@
-'use strict';
-/* eslint-disable linebreak-style */
-const utils = require('./utils');
-global.Fca = new Object({
-    isThread: new Map(),
-    isUser: new Map(),
-    startTime: Date.now(),
-    Setting: new Map(),
-    Version: require('./package.json').version,
-    Require: new Object({
-        fs: require("fs"),
-        Fetch: require('got'),
-        log: require("npmlog"),
-        utils: require("./utils.js"),
-        logger: require('./shiina/logger.js'),
-        languageFile: require('./shiina/Language/index.json'),
-        Security: null
-    }),
-    getText: function(/** @type {any[]} */...Data) {
-        var Main = (Data.splice(0,1)).toString();
-            for (let i = 0; i < Data.length; i++) Main = Main.replace(RegExp(`%${i + 1}`, 'g'), Data[i]);
-        return Main;
-    },
-    Data: new Object({
-        ObjFastConfig: {
-            "version": "1.0.1",
-            "Language": "vi",
-            "MainColor": "#9900FF",
-            "MainName": "[ SHIINA-FCA ]",
-            "DevMode": false,
-            "AntiSendAppState": true,
-            "AutoRestartMinutes": 0,
-            "RestartMQTT_Minutes": 0,
-            "ThreadCache": {
-                "MaxAgeMs": 900000,
-                "SweepIntervalMs": 900000
-            },
-            "Websocket_Extension": {
-                "Status": false,
-                "ResetData": false,
-                "AppState_Path": "appstate.json"
-            },
-            "AntiGetInfo": {
-                "Database_Type": "default",
-                "AntiGetThreadInfo": false,
-                "AntiGetUserInfo": false
-            },
-            "AntiStuckAndMemoryLeak": {
-                "AutoRestart": {
-                    "Use": false,
-                    "Explain": "When this feature is turned on, the system will continuously check and confirm that if memory usage reaches 90%, it will automatically restart to avoid freezing or stopping."
-                },
-                "LogFile": {
-                    "Use": false,
-                    "Explain": "Record memory usage logs to fix errors. Default location: ShiinaFca_Database/memory.log"
-                }
+"use strict";
+/**
+ * index.js — FCA Shiina
+ * Entry point: login, load api, expose api object
+ * Bám sát spec setupfca.txt & chuẩn fca-shiina-lightspeed
+ */
+
+const logger    = require("./shiina/logger");
+const lang      = require("./shiina/Languages/vi.json");
+const Database  = require("./shiina/database");
+
+const { parseToCookieArray, detectType, extractUID } = require("./shiina/login/cookie-parser");
+const { buildJar, jarToArray }  = require("./shiina/login/jar-builder");
+const { createHttpClient }      = require("./shiina/login/http-client");
+const { verifySession }         = require("./shiina/login/session-verifier");
+const { extractUserIDFromHtml } = require("./shiina/login/token-extractor");
+const { handleCheckpoint }      = require("./shiina/login/checkpoint");
+const { buildContext }          = require("./shiina/login/context-builder");
+const path      = require("path");
+const fs        = require("fs");
+const { loadAllApis }           = require("./shiina/load-api");
+
+const _startTime = Date.now();
+
+// Khởi tạo file cấu hình Shiina_ConfigFca.json ngay tại index.js
+const CONFIG_FILE = path.join(process.cwd(), "Shiina_ConfigFca.json");
+const DEFAULT_CONFIG = {
+    name: "FCA-Shiina",
+    version: "1.0.0",
+    Language: "vi",
+    PreKey: "Shiina",
+    AutoUpdate: false,
+    MainColor: "#9900FF",
+    MainName: "[ SHIINA-FCA ]",
+    Uptime: false,
+    Config: "default",
+    DevMode: false,
+    BroadCast: false,
+    EncryptFeature: false,
+    AntiSendAppState: true,
+    AutoRestartMinutes: 0,
+    RestartMQTT_Minutes: 0,
+    autoReconnect: true,
+    antiZombie: true,
+    zombieTimeout: 90,
+    maxCacheEvents: 200,
+    logLevel: "normal"
+};
+
+let shiinaConfig = {};
+try {
+    if (!fs.existsSync(CONFIG_FILE)) {
+        shiinaConfig = Object.assign({}, DEFAULT_CONFIG);
+        fs.writeFileSync(CONFIG_FILE, JSON.stringify(shiinaConfig, null, "\t"), "utf8");
+        logger.Normal("Đã khởi tạo file cấu hình: Shiina_ConfigFca.json");
+    } else {
+        const raw = fs.readFileSync(CONFIG_FILE, "utf8");
+        shiinaConfig = JSON.parse(raw);
+        let updated = false;
+        for (const k of Object.keys(DEFAULT_CONFIG)) {
+            if (shiinaConfig[k] === undefined) {
+                shiinaConfig[k] = DEFAULT_CONFIG[k];
+                updated = true;
+            }
+        }
+        if (updated) {
+            fs.writeFileSync(CONFIG_FILE, JSON.stringify(shiinaConfig, null, "\t"), "utf8");
+        }
+    }
+} catch (e) {
+    shiinaConfig = Object.assign({}, DEFAULT_CONFIG);
+}
+
+if (!global.Fca) {
+    global.Fca = {
+        isThread: new Map(),
+        isUser: new Map(),
+        startTime: _startTime,
+        Config: shiinaConfig,
+        Require: {
+            FastConfig: shiinaConfig
+        },
+        Data: {
+            MsgCount: new Map(),
+            event: new Map()
+        }
+    };
+} else {
+    global.Fca.Config = shiinaConfig;
+    if (!global.Fca.Require) global.Fca.Require = {};
+    global.Fca.Require.FastConfig = shiinaConfig;
+}
+
+function getText(key, ...args) {
+    let s = lang[key] || key;
+    for (let i = 0; i < args.length; i++) s = s.replace(`%${i + 1}`, args[i]);
+    return s;
+}
+
+async function getServerLocation(http) {
+    try {
+        const res = await http.get("http://ip-api.com/json/?fields=query,country,city,isp&lang=en");
+        const d = typeof res.data === "object" ? res.data : JSON.parse(res.data);
+        return `${d.query} - ${d.country}${d.city ? " - " + d.city : ""}${d.isp ? " - " + d.isp : ""}`;
+    } catch (_) {
+        return "Không xác định";
+    }
+}
+
+/**
+ * Main login function
+ * @param {object} credentials - { cookie: "..." } hoặc { appstate: [...] } hoặc raw string/array
+ * @param {object} [options]   - globalOptions
+ * @param {Function} callback  - (err, api) => void
+ */
+async function login(credentials, options, callback) {
+    if (typeof options === "function") {
+        callback = options;
+        options = {};
+    }
+    if (!callback) throw new Error("login() cần callback");
+
+    try { Database.init(); } catch (_) {}
+
+    const rawCred = credentials?.appState || credentials?.appstate || credentials?.cookie || credentials;
+    const credType = detectType(rawCred);
+
+    if (credType === "unknown") {
+        logger.Error(getText("LOGIN_FAILED"));
+        return callback(new Error("Credential không hợp lệ: cần cookie string hoặc appstate array"));
+    }
+
+    const cookieArr = parseToCookieArray(rawCred);
+    if (!cookieArr.length) {
+        logger.Error(getText("LOGIN_FAILED"));
+        return callback(new Error("Không parse được cookie/appstate"));
+    }
+
+    const jar = buildJar(cookieArr);
+    const http = createHttpClient(jar, options || {});
+
+    // Xác minh session qua hệ thống kiểm tra danh tính nghiêm ngặt
+    const { alive, html, tokens } = await verifySession(http).catch((e) => {
+        return { alive: false, html: "", tokens: {} };
+    });
+
+    let userID = extractUID(cookieArr) || extractUserIDFromHtml(html) || "unknown";
+
+    if (tokens.checkpoint && userID !== "unknown") {
+        await handleCheckpoint(tokens.checkpoint, html, http, tokens, userID);
+    }
+
+    // Một session chỉ coi là sống nếu server trả về ACCOUNT_ID/USER_ID !== 0 và alive = true
+    const isDead = !alive || tokens.isDead || !tokens.fb_dtsg;
+
+    if (isDead) {
+        logger.Error(getText("LOGIN_FAILED"));
+        logger.Error(getText("LOGIN_DEAD_STOP"));
+    } else {
+        logger.Success(getText(credType === "appstate" ? "LOGIN_SUCCESS_APPSTATE" : "LOGIN_SUCCESS_COOKIE"));
+    }
+
+    if (userID && userID !== "unknown") logger.Normal(getText("UID", userID));
+    if (tokens.name) logger.Normal(getText("NAME", tokens.name));
+
+    const location = await getServerLocation(http);
+    logger.Normal(getText("SERVER_LOCATION", location));
+
+    const ctx = buildContext({
+        userID,
+        userName: tokens.name || "Unknown",
+        tokens,
+        jar,
+        options: options || {},
+        region: tokens.mqttEndpoint ? null : null
+    });
+
+    ctx.globalOptions = ctx.options || {};
+
+    if (isDead) {
+        ctx._dead = true;
+    }
+
+    const api = {
+        ctx,
+        setOptions: (opt = {}) => {
+            if (typeof opt === "object" && opt !== null) {
+                Object.assign(ctx.options, opt);
             }
         },
-        CountTime: function() {
-            var fs = global.Fca.Require.fs;
-            if (fs.existsSync(__dirname + '/shiina/CountTime.json')) {
-                try {
-                    var data = Number(fs.readFileSync(__dirname + '/shiina/CountTime.json', 'utf8')),
-                    hours = Math.floor(data / (60 * 60));
-                }
-                catch (e) {
-                    fs.writeFileSync(__dirname + '/shiina/CountTime.json', 0);
-                    hours = 0;
-                }
-            }
-            else {
-                hours = 0;
-            }
-            return `${hours} Hours`;
-        }
-    }),
-    Action: async function(Type, ctx, Code, defaultFuncs) {
-        switch (Type) {
-            default: {
-                require('npmlog').Error("Invalid Message!");
-            };
-        }
-    }
-});
-
-try {
-    let Boolean_Fca = ["AntiSendAppState","DevMode"];
-    let String_Fca = ["MainName","Language","version","MainColor"];
-    let Number_Fca = ["AutoRestartMinutes","RestartMQTT_Minutes"];
-    let Object_Fca = ["AntiGetInfo","Websocket_Extension","AntiStuckAndMemoryLeak","ThreadCache"];
-    let All_Variable = Boolean_Fca.concat(String_Fca,Number_Fca,Object_Fca);
-
-    if (!global.Fca.Require.fs.existsSync(process.cwd() + '/Shiina-ConfigFca.json')) {
-        global.Fca.Require.fs.writeFileSync(process.cwd() + "/Shiina-ConfigFca.json", JSON.stringify(global.Fca.Data.ObjFastConfig, null, "\t"));
-        process.exit(1);
-    }
-
-try {
-    var Data_Setting = require(process.cwd() + "/Shiina-ConfigFca.json");
-}
-catch (e) {
-    global.Fca.Require.logger.Error('Detect Your Shiina-ConfigFca Settings Invalid!, Carry out default restoration');
-    global.Fca.Require.fs.writeFileSync(process.cwd() + "/Shiina-ConfigFca.json", JSON.stringify(global.Fca.Data.ObjFastConfig, null, "\t"));     
-    process.exit(1)
-}
-    if (global.Fca.Require.fs.existsSync(process.cwd() + '/Shiina-ConfigFca.json')) {
-        
-        for (let i of All_Variable) {
-            if (Data_Setting[i] == undefined) {
-                Data_Setting[i] = global.Fca.Data.ObjFastConfig[i];
-                global.Fca.Require.fs.writeFileSync(process.cwd() + "/Shiina-ConfigFca.json", JSON.stringify(Data_Setting, null, "\t"));
-            }
-            else continue; 
-        }
-
-        for (let i in Data_Setting) {
-            if (Boolean_Fca.includes(i)) {
-                if (global.Fca.Require.utils.getType(Data_Setting[i]) != "Boolean") logger.Error(i + " Is Not A Boolean, Need To Be true Or false !", function() { process.exit(0) });
-                else continue;
-            }
-            else if (String_Fca.includes(i)) {
-                if (global.Fca.Require.utils.getType(Data_Setting[i]) != "String") logger.Error(i + " Is Not A String, Need To Be String!", function() { process.exit(0) });
-                else continue;
-            }
-            else if (Number_Fca.includes(i)) {
-                if (global.Fca.Require.utils.getType(Data_Setting[i]) != "Number") logger.Error(i + " Is Not A Number, Need To Be Number !", function() { process.exit(0) });
-                else continue;
-            }
-            else if (Object_Fca.includes(i)) {
-                if (global.Fca.Require.utils.getType(Data_Setting[i]) != "Object") {
-                    Data_Setting[i] = global.Fca.Data.ObjFastConfig[i];
-                    global.Fca.Require.fs.writeFileSync(process.cwd() + "/Shiina-ConfigFca.json", JSON.stringify(Data_Setting, null, "\t"));
-                }
-                else continue;
-            }
-        }
-
-        for (let i of Object_Fca) {
-            const All_Paths = utils.getPaths(global.Fca.Data.ObjFastConfig[i]);
-            const Mission = { Main_Path: i, Data_Path: All_Paths }
-            for (let i of Mission.Data_Path) {
-                if (Data_Setting[Mission.Main_Path] == undefined) {
-                    Data_Setting[Mission.Main_Path] = global.Fca.Data.ObjFastConfig[Mission.Main_Path];
-                    global.Fca.Require.fs.writeFileSync(process.cwd() + "/Shiina-ConfigFca.json", JSON.stringify(Data_Setting, null, "\t"));      
-                }
-                const User_Data = (utils.getData_Path(Data_Setting[Mission.Main_Path], i, 0))
-                const User_Data_Type = utils.getType(User_Data);
-                if (User_Data_Type == "Number") {
-                    const Mission_Path = User_Data == 0 ? i : i.slice(0, User_Data); 
-                    const Mission_Obj = utils.getData_Path(global.Fca.Data.ObjFastConfig[Mission.Main_Path], Mission_Path, 0);
-                    Data_Setting[Mission.Main_Path] = utils.setData_Path(Data_Setting[Mission.Main_Path], Mission_Path, Mission_Obj)
-                    global.Fca.Require.fs.writeFileSync(process.cwd() + "/Shiina-ConfigFca.json", JSON.stringify(Data_Setting, null, "\t"));      
-                }
-            }
-        }
-
-        if (!global.Fca.Require.languageFile.some((/** @type {{ Language: string; }} */i) => i.Language == Data_Setting.Language)) { 
-            global.Fca.Require.logger.Warning("Not Support Language: " + Data_Setting.Language + " Only 'en' and 'vi'");
-            process.exit(0); 
-        }
-        global.Fca.Require.Language = global.Fca.Require.languageFile.find((/** @type {{ Language: string; }} */i) => i.Language == Data_Setting.Language).Folder;
-    } else process.exit(1);
-    global.Fca.Require.FastConfig = Data_Setting;
-
-    // Cache sweeper
-    (function setupCacheSweeper() {
-        const cfg = Data_Setting.ThreadCache || { MaxAgeMs: 900000, SweepIntervalMs: 900000 };
-        const maxAgeMs = Number(cfg.MaxAgeMs) > 0 ? Number(cfg.MaxAgeMs) : 900000;
-        const sweepIntervalMs = Number(cfg.SweepIntervalMs) > 0 ? Number(cfg.SweepIntervalMs) : 900000;
-
-        setInterval(() => {
-            const now = Date.now();
-            for (const [id, lastUsed] of global.Fca.isThread) {
-                if (now - lastUsed > maxAgeMs) global.Fca.isThread.delete(id);
-            }
-            for (const [id, lastUsed] of global.Fca.isUser) {
-                if (now - lastUsed > maxAgeMs) global.Fca.isUser.delete(id);
-            }
-        }, sweepIntervalMs).unref();
-    })();
-
-    // Non-fatal error handlers
-    if (!global.Fca._errorHandlersInstalled) {
-        global.Fca._errorHandlersInstalled = true;
-
-        process.on("unhandledRejection", (reason) => {
+        getAppState: () => jarToArray(jar),
+        getCurrentUserID: () => ctx.userID,
+        refreshDTSG: async () => {
             try {
-                const msg = reason && reason.message ? reason.message : String(reason || "");
-                if (msg.includes("connect") || msg.includes("timeout") || msg.includes("ECONN") || msg.includes("ENOTFOUND") || msg.includes("fetch failed")) {
-                    return;
+                const res = await http.get("https://www.facebook.com/settings");
+                const newHtml = typeof res.data === "string" ? res.data : "";
+                const { extractAllTokens } = require("./shiina/login/token-extractor");
+                const t = extractAllTokens(newHtml);
+                if (t.fb_dtsg) {
+                    ctx.fb_dtsg = t.fb_dtsg;
+                    ctx.jazoest = t.jazoest || ctx.jazoest;
+                    ctx.lsd     = t.lsd     || ctx.lsd;
+                    logger.Normal("Đã refresh fb_dtsg");
                 }
-            } catch (e) { /* ignore */ }
-        });
-
-        process.on("uncaughtException", (error) => {
+            } catch (_) {}
+            return ctx.fb_dtsg;
+        },
+        getTokens: () => ({
+            fb_dtsg: ctx.fb_dtsg || "",
+            jazoest: ctx.jazoest || "",
+            lsd: ctx.lsd || ""
+        }),
+        listApi: () => {
+            return Object.keys(api)
+                .filter(name => typeof api[name] === "function" && name !== "reloadFca" && name !== "listApi")
+                .sort((a, b) => a.localeCompare(b));
+        },
+        reloadFca: () => {
             try {
-                const msg = error.message || String(error || "");
-                if (msg.includes("connect") || msg.includes("timeout") || msg.includes("ECONN") || msg.includes("ENOTFOUND") || msg.includes("fetch failed")) {
-                    return;
+                const { ls, http: httpApis } = loadAllApis(api, ctx, http);
+                const total = (ls?.total || 0) + (httpApis?.total || 0);
+                const loaded = (ls?.success || 0) + (httpApis?.success || 0);
+                const failed = (ls?.fail || 0) + (httpApis?.fail || 0);
+                const errors = [...(ls?.errors || []), ...(httpApis?.errors || [])];
+
+                logger.Normal(`[RELOAD-FCA] Tổng: ${total} | Thành công: ${loaded} | Lỗi: ${failed}`);
+                if (failed > 0) {
+                    for (const e of errors) logger.Warn(`  ✗ ${e.file}: ${e.error}`);
                 }
-                console.error("Uncaught Exception (non-fatal):", msg);
-            } catch (e) { /* ignore */ }
-        });
+                return { total, loaded, failed, errors };
+            } catch (err) {
+                logger.Error(`[RELOAD-FCA] Lỗi reload: ${err?.message || err}`);
+                return { total: 0, loaded: 0, failed: 1, errors: [{ file: "all", error: err?.message || String(err) }] };
+            }
+        }
+    };
+
+    logger.Normal(getText("LOAD_API"));
+    const { ls, http: httpApis } = loadAllApis(api, ctx, http);
+
+    logger.Normal(getText("API_LIGHTSPEED", ls.total, ls.success, ls.fail));
+    if (ls.fail > 0) {
+        for (const e of ls.errors) logger.Warn(getText("API_FAIL_FILE", e.file, e.error));
     }
-}
-catch (e) {
-    console.log(e);
-    global.Fca.Require.logger.Error();
+    logger.Normal(getText("API_HTTP", httpApis.total, httpApis.success, httpApis.fail));
+    if (httpApis.fail > 0) {
+        for (const e of httpApis.errors) logger.Warn(getText("API_FAIL_FILE", e.file, e.error));
+    }
+
+    const elapsed = ((Date.now() - _startTime) / 1000).toFixed(2);
+    logger.Success(getText("START_SUCCESS", elapsed));
+
+
+
+    if (isDead) {
+        logger.Error(getText("LOGIN_DEAD"));
+        logger.Error(getText("LOGIN_DEAD_STOP"));
+        setInterval(() => {}, 1000 * 60 * 60);
+        return callback(new Error("Not logged in: Cookie/appstate đã die vui lòng thay mới"), api);
+    }
+
+    callback(null, api);
 }
 
-module.exports = function(loginData, options, callback) {
-    var login;
-    try {
-        login = require('./Main');
-    }
-    catch (e) {
-        console.log(e)
-    }
-    
-    try {
-        login(loginData, options, callback);
-    }
-    catch (e) {
-        console.log(e)
-    }
-};
+module.exports = login;
